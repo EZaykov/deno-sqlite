@@ -4,7 +4,7 @@
 
 #include <stdio.h>
 
-// Print debug messages
+// Print debug messages FIXME: Use an alternative to printf!
 #define debug_printf(...) printf("DEBUG: %s:%d:%s(): ", __FILE__, __LINE__, __func__);\
                           printf(__VA_ARGS__);
 

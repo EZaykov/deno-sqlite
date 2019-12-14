@@ -1,7 +1,8 @@
 #include <stdlib.h>
-#include <emscripten.h>
-#include <sqlite3.h>
-#include <debug.h>
+#include "sqlite3.h"
+#include "debug.h"
+
+#define KEEPALIVE __attribute__((used)) __attribute__ ((visibility ("default")))
 
 #define MAX_TRANSACTIONS 32
 #define ERROR_VAL        -1
@@ -31,7 +32,7 @@ int main() {
 }
 
 // Initialize this module instance
-int EMSCRIPTEN_KEEPALIVE init() {
+int KEEPALIVE init() {
   // Allocate transaction list
   transactions = malloc(sizeof(sqlite3_stmt*) * MAX_TRANSACTIONS);
   for (int i = 0; i < MAX_TRANSACTIONS; i ++)
@@ -47,17 +48,17 @@ int EMSCRIPTEN_KEEPALIVE init() {
 
 // Return last status encountered. This combines
 // SQLite status codes and wrapper error codes
-int EMSCRIPTEN_KEEPALIVE get_status() {
+int KEEPALIVE get_status() {
   return last_status;
 }
 
 // Return most recent SQLite error as a string.
-const char* EMSCRIPTEN_KEEPALIVE get_sqlite_error_str() {
+const char* KEEPALIVE get_sqlite_error_str() {
   return sqlite3_errmsg(db);
 }
 
 // Wraps sqlite3_prepare
-int EMSCRIPTEN_KEEPALIVE prepare(const char* sql) {
+int KEEPALIVE prepare(const char* sql) {
   if (open_transactions >= MAX_TRANSACTIONS) {
     debug_printf("transaction limit exceeded\n");
     last_status = STATUS_TRANSACTION_LIMIT;
@@ -91,7 +92,7 @@ int EMSCRIPTEN_KEEPALIVE prepare(const char* sql) {
 
 // Destruct the given statement/ transaction. This will destruct the SQLite
 // statement and free up it's transaction slot.
-int EMSCRIPTEN_KEEPALIVE finalize(int trans) {
+int KEEPALIVE finalize(int trans) {
   if (transactions[trans] == NULL)
     return SQLITE_OK;
 
@@ -103,13 +104,13 @@ int EMSCRIPTEN_KEEPALIVE finalize(int trans) {
 }
 
 // Finalize all statements
-void EMSCRIPTEN_KEEPALIVE finalize_all() {
+void KEEPALIVE finalize_all() {
   for (int trans = 0; trans < MAX_TRANSACTIONS; trans ++)
     finalize(trans);
 }
 
 // Wrappers for bind statements, these return the status directly
-int EMSCRIPTEN_KEEPALIVE bind_int(int trans, int idx, double value) {
+int KEEPALIVE bind_int(int trans, int idx, double value) {
   GUARD_TRANSACTION(trans);
   // we use double to pass in the value, as JS does not support 64 bit integers,
   // but handles floats and we can contain a 32 bit in in a 64 bit float, so there
@@ -119,14 +120,14 @@ int EMSCRIPTEN_KEEPALIVE bind_int(int trans, int idx, double value) {
   return last_status;
 }
 
-int EMSCRIPTEN_KEEPALIVE bind_double(int trans, int idx, double value) {
+int KEEPALIVE bind_double(int trans, int idx, double value) {
   GUARD_TRANSACTION(trans);
   last_status = sqlite3_bind_double(transactions[trans], idx, value);
   debug_printf("binding double %f (status %i)\n", value, last_status);
   return last_status;
 }
 
-int EMSCRIPTEN_KEEPALIVE bind_text(int trans, int idx, const char* value) {
+int KEEPALIVE bind_text(int trans, int idx, const char* value) {
   GUARD_TRANSACTION(trans);
   // SQLite retrains the string until we execute the statement, but emscripten
   // frees any strings passed in when the function returns. Thus we need to mark
@@ -136,7 +137,7 @@ int EMSCRIPTEN_KEEPALIVE bind_text(int trans, int idx, const char* value) {
   return last_status;
 }
 
-int EMSCRIPTEN_KEEPALIVE bind_null(int trans, int idx) {
+int KEEPALIVE bind_null(int trans, int idx) {
   GUARD_TRANSACTION(trans);
   last_status = sqlite3_bind_null(transactions[trans], idx);
   debug_printf("binding null (status %i)\n", last_status);
@@ -144,7 +145,7 @@ int EMSCRIPTEN_KEEPALIVE bind_null(int trans, int idx) {
 }
 
 // Wraps running statements, this returns the status directly
-int EMSCRIPTEN_KEEPALIVE step(int trans) {
+int KEEPALIVE step(int trans) {
   GUARD_TRANSACTION(trans);
   last_status = sqlite3_step(transactions[trans]);
   debug_printf("stepping transaction %i (status %i)\n", trans, last_status);
@@ -153,7 +154,7 @@ int EMSCRIPTEN_KEEPALIVE step(int trans) {
 
 // Count columns returned by statement. If the statement does not
 // exist, ERROR_VAL is returned.
-int EMSCRIPTEN_KEEPALIVE column_count(int trans) {
+int KEEPALIVE column_count(int trans) {
   if (transactions[trans] == NULL) {
     debug_printf("column_count failed silently\n");
     return ERROR_VAL;
@@ -163,7 +164,7 @@ int EMSCRIPTEN_KEEPALIVE column_count(int trans) {
 
 // Determine type of column. Returns SQLITE column types and SQLITE_NULL
 // if the column does not exist.
-int EMSCRIPTEN_KEEPALIVE column_type(int trans, int col) {
+int KEEPALIVE column_type(int trans, int col) {
   if (transactions[trans] == NULL) {
     debug_printf("column_type failed silently\n");
     return SQLITE_NULL;
@@ -172,7 +173,7 @@ int EMSCRIPTEN_KEEPALIVE column_type(int trans, int col) {
 }
 
 // Wrap result returning functions. These fail silently.
-double EMSCRIPTEN_KEEPALIVE column_int(int trans, int col) {
+double KEEPALIVE column_int(int trans, int col) {
   if (transactions[trans] == NULL) {
     debug_printf("column_int failed silently\n");
     return 0.0;
@@ -180,7 +181,7 @@ double EMSCRIPTEN_KEEPALIVE column_int(int trans, int col) {
   return (double)sqlite3_column_int64(transactions[trans], col);
 }
 
-double EMSCRIPTEN_KEEPALIVE column_double(int trans, int col) {
+double KEEPALIVE column_double(int trans, int col) {
   if (transactions[trans] == NULL) {
     debug_printf("column_double failed silently\n");
     return 0.0;
@@ -188,10 +189,14 @@ double EMSCRIPTEN_KEEPALIVE column_double(int trans, int col) {
   return sqlite3_column_double(transactions[trans], col);
 }
 
-const char* EMSCRIPTEN_KEEPALIVE column_text(int trans, int col) {
+const char* KEEPALIVE column_text(int trans, int col) {
   if (transactions[trans] == NULL) {
     debug_printf("column_text failed silently\n");
     return "";
   }
   return (const char*)sqlite3_column_text(transactions[trans], col);
+}
+
+void KEEPALIVE test() {
+  sqlite3_shutdown();
 }
