@@ -27,10 +27,6 @@ int last_transaction; // last used entry
 // Status returned by last instruction
 int last_status;
 
-int main() {
-  debug_printf("transaction limit: %i\n", MAX_TRANSACTIONS);
-}
-
 // Initialize this module instance
 int KEEPALIVE init() {
   // Allocate transaction list
@@ -41,7 +37,7 @@ int KEEPALIVE init() {
   last_transaction  = 0;
 
   // Initialize SQLite
-  last_status = sqlite3_open("/db", &db);
+  last_status = sqlite3_open("a", &db);
   debug_printf("initialized db, status: %i\n", last_status);
   return last_status;
 }
@@ -195,8 +191,4 @@ const char* KEEPALIVE column_text(int trans, int col) {
     return "";
   }
   return (const char*)sqlite3_column_text(transactions[trans], col);
-}
-
-void KEEPALIVE test() {
-  sqlite3_shutdown();
 }

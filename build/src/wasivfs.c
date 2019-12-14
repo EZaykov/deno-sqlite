@@ -1,35 +1,49 @@
-/*
-** 2010 April 7
-**
-** The author disclaims copyright to this source code.  In place of
-** a legal notice, here is a blessing:
-**
-**    May you do good and not evil.
-**    May you find forgiveness for yourself and forgive others.
-**    May you share freely, never taking more than you give.
-**
-*************************************************************************
-**
-** This file implements a simple in-memory VFS. Based on the SQLite demovfs.
-*/
-
+#include <string.h>
+#include <stdlib.h>
 #include "sqlite3.h"
 
-// #include <assert.h>
-// #include <string.h>
-// #include <sys/types.h>
-// #include <sys/stat.h>
-// #include <sys/file.h>
-// #include <sys/param.h>
-// #include <unistd.h>
-// #include <time.h>
-// #include <errno.h>
-// #include <fcntl.h>
+// File-names simply index into the open_files array
+#define MAXPATHNAME 1
+#define MAXOPENFILES 256
 
-/*
-** The maximum pathname length supported by this VFS.
-*/
-#define MAXPATHNAME 512
+// WasiBuf stores a memory buffer
+typedef struct WasiBuf WasiBuf;
+struct WasiBuf {
+  char* b;
+  int len;
+};
+
+WasiBuf** open_files;
+
+WasiBuf* new_buffer() {
+  WasiBuf* buf = malloc(sizeof(WasiBuf));
+  if (buf == NULL)
+    return NULL;
+  buf->b = NULL;
+  buf->len = 0;
+  return buf;
+}
+int grow_buffer(WasiBuf* buf, int size) {
+  if (buf->len <= size)
+    return 1;
+  if (buf->b == NULL) {
+    buf->b = malloc(sizeof(char) * size);
+    return buf->b != NULL;
+  } else {
+    char* b = realloc(buf->b, sizeof(char) * size);
+    if (b == NULL)
+      return 0;
+    buf->b = b;
+    return 1;
+  }
+}
+void free_buffer(WasiBuf* buf) {
+  if (buf == NULL)
+    return;
+  if (buf->b != NULL)
+    free(buf->b);
+  free(buf);
+}
 
 /*
 ** When using this VFS, the sqlite3_file* handles that SQLite uses are
@@ -37,82 +51,62 @@
 */
 typedef struct WasiFile WasiFile;
 struct WasiFile {
-  sqlite3_file base;              /* Base class. Must be first. */
-  int fd;                         /* File descriptor */
-
-  char *aBuffer;                  /* Pointer to malloc'd buffer */
-  int nBuffer;                    /* Valid bytes of data in zBuffer */
-  sqlite3_int64 iBufferOfst;      /* Offset in file of zBuffer[0] */
+  sqlite3_file base;
+  char id;
+  WasiBuf* buf;
 };
 
-/*
-** Close a file.
-*/
+// For permanent files, this is a no-op. For temp
+// files this deallocates the buffer.
 static int wasiClose(sqlite3_file *pFile){
-  // TODO
-  return SQLITE_IOERR_CLOSE;
+  WasiFile* p = (WasiFile*)pFile;
+  if (p->id == '\0')
+    free_buffer(p->buf);
+  return SQLITE_OK;
 }
 
-/*
-** Read data from a file.
-*/
-static int wasiRead(
-  sqlite3_file *pFile, 
-  void *zBuf, 
-  int iAmt, 
-  sqlite_int64 iOfst
-){
+// Read data from a file.
+static int wasiRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite_int64 iOfst){
   WasiFile *p = (WasiFile*)pFile;
-  // TODO
-  return SQLITE_IOERR_READ;
+
+  // If the read is to long, this is an error
+  if ((sqlite_int64)iAmt + iOfst > p->buf->len)
+    return SQLITE_IOERR_READ;
+
+  memcpy(zBuf, &(p->buf->b[iOfst]), iAmt);
+  return SQLITE_OK;
 }
 
-/*
-** Write data to a file.
-*/
-static int wasiWrite(
-  sqlite3_file *pFile, 
-  const void *zBuf, 
-  int iAmt, 
-  sqlite_int64 iOfst
-){
+// Write data to a file.
+static int wasiWrite(sqlite3_file *pFile, const void *zBuf, int iAmt, sqlite_int64 iOfst){
   WasiFile *p = (WasiFile*)pFile;
-  // TODO
-  return SQLITE_IOERR_WRITE;
+
+  // TODO: Do we need to zero the new memory?
+  if (!grow_buffer(p->buf, (sqlite_int64)iAmt + iOfst))
+    return SQLITE_IOERR_WRITE;
+
+  memcpy(&(p->buf->b[iOfst]), zBuf, iAmt);
+  return SQLITE_OK;
 }
 
-/*
-** Truncate a file. This is a no-op for this VFS (see header comments at
-** the top of the file).
-*/
+// We do not implement this. TODO: Should we?
 static int wasiTruncate(sqlite3_file *pFile, sqlite_int64 size){
-  // TODO: Do we need this?
   return SQLITE_OK;
 }
 
-/*
-** Sync the contents of the file to the persistent media.
-*/
+// We are completely in-memory.
 static int wasiSync(sqlite3_file *pFile, int flags){
-  // NO OP
   return SQLITE_OK;
 }
 
-/*
-** Write the size of the file in bytes to *pSize.
-*/
+// Write the size of the file in bytes to *pSize.
 static int wasiFileSize(sqlite3_file *pFile, sqlite_int64 *pSize){
   WasiFile *p = (WasiFile*)pFile;
-  // TODO
-  return SQLITE_ERROR;
+  *pSize = p->buf->len;
+  return SQLITE_OK;
 }
 
-/*
-** Locking functions. The xLock() and xUnlock() methods are both no-ops.
-** The xCheckReservedLock() always indicates that no other process holds
-** a reserved lock on the database file. This ensures that if a hot-journal
-** file is found in the file-system it is rolled back.
-*/
+// We do not support nor need files locks.
 static int wasiLock(sqlite3_file *pFile, int eLock){
   return SQLITE_OK;
 }
@@ -124,18 +118,12 @@ static int wasiCheckReservedLock(sqlite3_file *pFile, int *pResOut){
   return SQLITE_OK;
 }
 
-/*
-** No xFileControl() verbs are implemented by this VFS.
-*/
+// No xFileControl() verbs are implemented by this VFS.
 static int wasiFileControl(sqlite3_file *pFile, int op, void *pArg){
   return SQLITE_NOTFOUND;
 }
 
-/*
-** The xSectorSize() and xDeviceCharacteristics() methods. These two
-** may return special values allowing SQLite to optimize file-system
-** access to some extent. But it is also safe to simply return 0.
-*/
+// We are in-memory.
 static int wasiSectorSize(sqlite3_file *pFile){
   return 0;
 }
@@ -143,9 +131,7 @@ static int wasiDeviceCharacteristics(sqlite3_file *pFile){
   return 0;
 }
 
-/*
-** Open a file handle.
-*/
+// Open a file handle.
 static int wasiOpen(
   sqlite3_vfs *pVfs,              /* VFS */
   const char *zName,              /* File to open, or 0 for a temp file */
@@ -171,39 +157,41 @@ static int wasiOpen(
 
   WasiFile *p = (WasiFile*)pFile;
   p->base.pMethods = &wasiio;
-  // TODO
 
-  return SQLITE_ERROR;
+  // Create new buffer for temp-file
+  if (zName == NULL) {
+    p->id = '\0';
+    WasiBuf* buf = new_buffer();
+    if (buf == NULL)
+      return SQLITE_NOMEM;
+    p->buf = buf;
+  } else {
+    p->id = zName[0];
+    if (open_files[zName[0]] == NULL) {
+      open_files[zName[0]] = new_buffer();
+      if (open_files[zName[0]] == NULL)
+        return SQLITE_NOMEM;
+    }
+    p->buf = open_files[zName[0]];
+  }
+
+  return SQLITE_OK;
 }
 
-/*
-** Delete the file identified by argument zPath. If the dirSync parameter
-** is non-zero, then ensure the file-system modification to delete the
-** file has been synced to disk before returning.
-*/
+// Delete the file at the path.
 static int wasiDelete(sqlite3_vfs *pVfs, const char *zPath, int dirSync){
-  // TODO
-  return SQLITE_IOERR_DELETE;
+  free_buffer(open_files[zPath[0]]);
+  open_files[zPath[0]] = NULL;
+  return SQLITE_OK;
 }
 
-/*
-** Query the file-system to see if the named file exists, is readable or
-** is both readable and writable. All files are valid.
-*/
-static int wasiAccess(
-  sqlite3_vfs *pVfs, 
-  const char *zPath, 
-  int flags, 
-  int *pResOut
-){
+// All valid length files exist and are accessible.
+static int wasiAccess(sqlite3_vfs *pVfs, const char *zPath, int flags, int *pResOut){
   *pResOut = 1;
   return SQLITE_OK;
 }
 
-/*
-** Argument zPath points to a nul-terminated string containing a file path.
-** For the in-memory file system zPath is always copied to the output.
-*/
+// This just copies the data, as file names are all one long.
 static int wasiFullPathname(
   sqlite3_vfs *pVfs,              /* VFS */
   const char *zPath,              /* Input path (possibly a relative path) */
@@ -211,8 +199,8 @@ static int wasiFullPathname(
   char *zPathOut                  /* Pointer to output buffer */
 ){
   if (nPathOut > 0) {
-    sqlite3_snprintf(nPathOut, zPathOut, "%s", zPath);
-    zPathOut[nPathOut-1] = '\0';
+    zPathOut[0] = zPath[0];
+    zPathOut[1] = '\0';
   }
   return SQLITE_OK;
 }
@@ -243,36 +231,24 @@ static void wasiDlClose(sqlite3_vfs *pVfs, void *pHandle){
   return;
 }
 
-/*
-** Parameter zByte points to a buffer nByte bytes in size. Populate this
-** buffer with pseudo-random data.
-*/
+// Generate pseudo-random data
 static int wasiRandomness(sqlite3_vfs *pVfs, int nByte, char *zByte){
   // TODO: Embed a RNG (PCG) and seed from JS side if wanted ...
   return SQLITE_OK;
 }
 
-/*
-** Sleep for at least nMicro microseconds. Return the (approximate) number 
-** of microseconds slept for.
-*/
+// TODO: Can anything be done here?
 static int wasiSleep(sqlite3_vfs *pVfs, int nMicro){
-  // TODO: Can anything be done here?
   return 0;
 }
 
-/*
-** Set *pTime to the current UTC time expressed as a Julian day. Return
-** SQLITE_OK if successful, or an error code otherwise.
-*/
+// TODO: Can anything be done here?
 static int wasiCurrentTime(sqlite3_vfs *pVfs, double *pTime){
   *pTime = 0;
   return SQLITE_ERROR;
 }
 
-/*
-** This function returns a pointer to the VFS implemented in this file.
-*/
+// This function returns a pointer to the VFS implemented in this file.
 sqlite3_vfs *sqlite3_wasivfs(void){
   static sqlite3_vfs wasivfs = {
     1,                            /* iVersion */
@@ -296,12 +272,16 @@ sqlite3_vfs *sqlite3_wasivfs(void){
   return &wasivfs;
 }
 
-/*
-** Initialize WASI in-memory fs
-*/
+// Initialize WASI in-memory fs
 int sqlite3_os_init(void) {
+  // Create file registry
+  open_files = malloc(sizeof(WasiBuf*) * MAXOPENFILES);
+  if (open_files == NULL)
+    return SQLITE_NOMEM;
+  for (int i = 0; i < MAXOPENFILES; i ++)
+    open_files[i] = NULL;
+  // Register with SQLite
   return sqlite3_vfs_register(sqlite3_wasivfs(), 1);
-  // return SQLITE_OK;
 }
 
 int sqlite3_os_end(void) {

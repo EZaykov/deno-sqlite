@@ -8,7 +8,6 @@ CSRC  = $(shell find . -name "*.c")
 FLGS  = -Wall --target=wasm32-unknown-wasi -Wl,--no-entry -nostartfiles --sysroot $(WASI)/share/wasi-sysroot
 RFLG  = -Os
 DFLG  = -DDEBUG_BUILD
-# JSFLG = -s MODULARIZE=1 -s EXPORT_ES6=1 -s ENVIRONMENT=shell -s EXTRA_EXPORTED_RUNTIME_METHODS="['ccall', 'FS']"
 INCS  = -Ilib -Isrc
 
 # Configure sqlite for out use-case
